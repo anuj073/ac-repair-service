@@ -1,0 +1,567 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  TECHNICIAN
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  ASSIGNED
+  ON_THE_WAY
+  WORKING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  NET_BANKING
+  WALLET
+  RAZORPAY
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMED
+  TECHNICIAN_ASSIGNED
+  TECHNICIAN_ARRIVING
+  WORK_STARTED
+  WORK_COMPLETED
+  PAYMENT_RECEIVED
+  BOOKING_CANCELLED
+  REVIEW_REQUEST
+  PROMOTIONAL
+  AMC_REMINDER
+  EMERGENCY_ALERT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id                  String         @id @default(uuid())
+  email               String?        @unique
+  phone               String         @unique
+  password            String?
+  name                String?
+  avatar              String?
+  role                UserRole       @default(CUSTOMER)
+  isVerified          Boolean        @default(false)
+  isActive            Boolean        @default(true)
+  otp                 String?
+  otpExpiry           DateTime?
+  refreshToken        String?
+  resetToken          String?
+  resetTokenExpiry    DateTime?
+  fcmToken            String?
+
+  // Profile
+  address             String?
+  city                String?
+  state               String?
+  pincode             String?
+  latitude            Float?
+  longitude           Float?
+  language            String         @default("en")
+
+  // Technician specific
+  experience          Int?
+  specialization      String?
+  isAvailable         Boolean        @default(true)
+  isVerifiedTech      Boolean        @default(false)
+  idProof             String?
+  certification       String?
+  rating              Float          @default(0)
+  totalRatings        Int            @default(0)
+  completedJobs       Int            @default(0)
+  serviceAreas        String?        // Comma-separated pincodes
+  workingHours        String?        // JSON
+
+  // Relations
+  bookingsAsCustomer  Booking[]      @relation("CustomerBookings")
+  bookingsAsTechnician Booking[]     @relation("TechnicianBookings")
+  reviews             Review[]
+  notifications       Notification[]
+  supportTickets      SupportTicket[]
+  invoices            Invoice[]
+  auditLogs           AuditLog[]
+  addresses           UserAddress[]
+
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([phone])
+  @@index([email])
+  @@index([role])
+  @@index([pincode])
+  @@index([city])
+}
+
+model UserAddress {
+  id         String   @id @default(uuid())
+  userId     String
+  label      String   @default("Home") // Home, Work, Other
+  address    String
+  city       String
+  state      String
+  pincode    String
+  latitude   Float?
+  longitude  Float?
+  isDefault  Boolean  @default(false)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model ServiceCategory {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String    @unique
+  description String?
+  icon        String?
+  image       String?
+  isActive    Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  services    Service[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([isActive])
+}
+
+model Service {
+  id           String           @id @default(uuid())
+  categoryId   String
+  category     ServiceCategory  @relation(fields: [categoryId], references: [id])
+  name         String
+  slug         String           @unique
+  description  String?
+  shortDesc    String?
+  icon         String?
+  image        String?
+  price        Float
+  discountedPrice Float?
+  duration     Int              // in minutes
+  isActive     Boolean          @default(true)
+  isPopular    Boolean          @default(false)
+  isEmergency  Boolean          @default(false)
+  warrantyDays Int              @default(30)
+  sortOrder    Int              @default(0)
+  tags         String?          // Comma-separated
+  bookings     Booking[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([isActive])
+  @@index([isPopular])
+}
+
+model Booking {
+  id              String         @id @default(uuid())
+  bookingId       String         @unique // Human-readable: ACR-XXXXX
+  customerId      String
+  customer        User           @relation("CustomerBookings", fields: [customerId], references: [id])
+  technicianId    String?
+  technician      User?          @relation("TechnicianBookings", fields: [technicianId], references: [id])
+  serviceId       String
+  service         Service        @relation(fields: [serviceId], references: [id])
+
+  // Service details
+  acType          String?        // Split, Window, Cassette, Tower, Duct, VRV, VRF
+  brand           String?
+  issue           String?
+
+  // Schedule
+  preferredDate   DateTime
+  preferredTime   String         // Time slot
+  isEmergency     Boolean        @default(false)
+
+  // Location
+  addressId       String?
+  address         String
+  city            String
+  state           String
+  pincode         String
+  latitude        Float?
+  longitude       Float?
+
+  // Images
+  beforeImages    String?        // JSON array
+  afterImages     String?        // JSON array
+  issueImages     String?        // JSON array
+
+  // Financial
+  estimatedPrice  Float
+  finalPrice      Float?
+  discountAmount  Float          @default(0)
+  couponId        String?
+  coupon          Coupon?        @relation(fields: [couponId], references: [id])
+  totalAmount     Float
+  paymentStatus   PaymentStatus  @default(PENDING)
+  paymentMethod   PaymentMethod?
+  paymentId       String?
+  invoiceId       String?
+
+  // Status
+  status          BookingStatus  @default(PENDING)
+  cancellationReason String?
+  notes           String?
+  otpVerified     Boolean        @default(false)
+
+  // Timestamps
+  confirmedAt     DateTime?
+  assignedAt      DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  // Relations
+  review          Review?
+  payment         Payment?
+  invoice         Invoice?
+  notifications   Notification[]
+
+  @@index([bookingId])
+  @@index([customerId])
+  @@index([technicianId])
+  @@index([status])
+  @@index([preferredDate])
+  @@index([pincode])
+  @@index([city])
+  @@index([paymentStatus])
+}
+
+model Review {
+  id          String   @id @default(uuid())
+  bookingId   String   @unique
+  booking     Booking  @relation(fields: [bookingId], references: [id])
+  customerId  String
+  customer    User     @relation(fields: [customerId], references: [id])
+  technicianId String?
+  rating      Int      // 1-5
+  comment     String?
+  images      String?  // JSON array
+  isApproved  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([customerId])
+  @@index([rating])
+  @@index([isApproved])
+}
+
+model Invoice {
+  id              String        @id @default(uuid())
+  invoiceNumber   String        @unique // INV-XXXXX
+  bookingId       String        @unique
+  booking         Booking       @relation(fields: [bookingId], references: [id])
+  customerId      String
+  customer        User          @relation(fields: [customerId], references: [id])
+  technicianId    String?
+  subtotal        Float
+  taxAmount       Float
+  discountAmount  Float         @default(0)
+  totalAmount     Float
+  paymentStatus   PaymentStatus @default(PENDING)
+  paymentMethod   PaymentMethod?
+  gstNumber       String?       // GST for business customers
+  items           String?       // JSON array of line items
+  notes           String?
+  dueDate         DateTime?
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([invoiceNumber])
+  @@index([customerId])
+  @@index([bookingId])
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  bookingId       String        @unique
+  booking         Booking       @relation(fields: [bookingId], references: [id])
+  razorpayOrderId String?       @unique
+  razorpayPaymentId String?     @unique
+  razorpaySignature String?
+  amount          Float
+  currency        String        @default("INR")
+  status          PaymentStatus @default(PENDING)
+  method          PaymentMethod?
+  gatewayResponse String?       // JSON
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([bookingId])
+  @@index([razorpayOrderId])
+}
+
+model Coupon {
+  id              String        @id @default(uuid())
+  code            String        @unique
+  description     String?
+  discountType    String        // PERCENTAGE or FIXED
+  discountValue   Float
+  minOrderAmount  Float         @default(0)
+  maxDiscount     Float?
+  maxUsage        Int           @default(100)
+  usedCount       Int           @default(0)
+  isActive        Boolean       @default(true)
+  isFirstBooking  Boolean       @default(false)
+  validForServices String?      // Comma-separated service IDs
+  validFrom       DateTime
+  validTo         DateTime
+  bookings        Booking[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([code])
+  @@index([isActive])
+  @@index([validFrom, validTo])
+}
+
+model City {
+  id        String   @id @default(uuid())
+  name      String
+  state     String
+  isActive  Boolean  @default(true)
+  areas     Area[]
+  pincodes  Pincode[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([name, state])
+  @@index([name])
+  @@index([isActive])
+}
+
+model Area {
+  id        String   @id @default(uuid())
+  name      String
+  cityId    String
+  city      City     @relation(fields: [cityId], references: [id])
+  pincode   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([cityId])
+  @@index([pincode])
+}
+
+model Pincode {
+  id        String   @id @default(uuid())
+  pincode   String
+  cityId    String
+  city      City     @relation(fields: [cityId], references: [id])
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([pincode])
+  @@index([pincode])
+  @@index([cityId])
+}
+
+model Blog {
+  id            String   @id @default(uuid())
+  title         String
+  slug          String   @unique
+  excerpt       String?
+  content       String
+  coverImage    String?
+  author        String
+  category      String?
+  tags          String?  // JSON array
+  isPublished   Boolean  @default(false)
+  publishedAt   DateTime?
+  metaTitle     String?
+  metaDesc      String?
+  viewCount     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([slug])
+  @@index([isPublished])
+  @@index([category])
+  @@index([publishedAt])
+}
+
+model FAQ {
+  id          String   @id @default(uuid())
+  question    String
+  answer      String
+  category    String?  // General, Pricing, Service, Booking, Warranty
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([isActive])
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        NotificationType
+  title       String
+  message     String
+  data        String?          // JSON payload
+  isRead      Boolean          @default(false)
+  bookingId   String?
+  booking     Booking?         @relation(fields: [bookingId], references: [id])
+  createdAt   DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model SupportTicket {
+  id          String         @id @default(uuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  subject     String
+  description String
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+  messages    String?        // JSON array of chat messages
+  assignedTo  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  action      String   // CREATE, UPDATE, DELETE, LOGIN, LOGOUT
+  entity      String   // Booking, User, Service, etc.
+  entityId    String?
+  details     String?  // JSON
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([createdAt])
+}
+
+model Inventory {
+  id          String   @id @default(uuid())
+  name        String
+  sku         String   @unique
+  description String?
+  category    String?
+  quantity    Int      @default(0)
+  minQuantity Int      @default(5)
+  unitPrice   Float
+  sellingPrice Float
+  supplier    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sku])
+  @@index([category])
+  @@index([isActive])
+}
+
+model SparePart {
+  id          String   @id @default(uuid())
+  name        String
+  brand       String?
+  modelNo     String?
+  description String?
+  price       Float
+  quantity    Int      @default(0)
+  category    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+  @@index([brand])
+  @@index([category])
+}
+
+model Banner {
+  id        String   @id @default(uuid())
+  title     String
+  subtitle  String?
+  image     String
+  link      String?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model AMC {
+  id              String    @id @default(uuid())
+  customerId      String
+  planName        String    // Silver, Gold, Platinum
+  description     String?
+  price           Float
+  durationMonths  Int       @default(12)
+  visitCount      Int       @default(2) // Visits per year
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean   @default(true)
+  autoRenew       Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([isActive])
+}
